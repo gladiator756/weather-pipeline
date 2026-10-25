@@ -15,6 +15,8 @@ import time
 import psycopg2
 import requests
 from psycopg2.extras import Json
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 API_URL = "https://api.open-meteo.com/v1/forecast"
 CURRENT_FIELDS = (
@@ -53,9 +55,32 @@ def get_connection():
     )
 
 
+def make_session() -> requests.Session:
+    """HTTP session that retries timeouts, rate limits and server errors with backoff.
+
+    The API occasionally doesn't answer requests from shared CI runners, so a single
+    attempt is not enough for a scheduled job.
+    """
+    retry = Retry(
+        total=4,
+        backoff_factor=2,  # waits 2, 4, 8, 16 s between attempts
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        respect_retry_after_header=True,
+    )
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+SESSION = make_session()
+
+
 def fetch(lat: float, lon: float) -> dict:
     params = {"latitude": lat, "longitude": lon, "current": CURRENT_FIELDS, "timezone": "auto"}
-    resp = requests.get(API_URL, params=params, timeout=15)
+    resp = SESSION.get(API_URL, params=params, timeout=(10, 15))  # (connect, read) seconds
     resp.raise_for_status()
     return resp.json()
 
