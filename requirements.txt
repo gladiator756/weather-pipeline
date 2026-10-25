@@ -2,4 +2,6 @@
 streamlit>=1.50
 pandas>=2.0
 sqlalchemy>=2.0
+# SQLAlchemy 2.1+ uses psycopg (v3) for postgresql:// URLs; 2.0 uses psycopg2
+psycopg[binary]>=3.2
 psycopg2-binary>=2.9
