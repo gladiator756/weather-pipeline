@@ -63,7 +63,7 @@ except Exception as exc:  # don't print the message: it may contain connection d
     )
     st.caption(f"Error type: {type(exc).__name__}")
     if isinstance(exc, ModuleNotFoundError):  # safe to show: no connection details
-        st.caption(f"Missing Python package: {exc.name}")
+        st.caption(f"Missing Python package: {exc.name or exc}")
     st.stop()
 
 if df.empty:
