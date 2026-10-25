@@ -1,0 +1,45 @@
+name: Weather pipeline
+
+on:
+  schedule:
+    # Twice an hour, away from the :00 mark that GitHub is busiest at.
+    - cron: "7,37 * * * *"
+  workflow_dispatch:   # lets you run it manually from the Actions tab
+
+concurrency:
+  group: weather-pipeline
+  cancel-in-progress: false
+
+jobs:
+  extract-and-transform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+      POSTGRES_SSLMODE: require
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-pipeline.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-pipeline.txt
+
+      - name: Extract (Open-Meteo -> raw table)
+        run: python extractor/extract.py --once
+
+      - name: Transform (dbt run)
+        working-directory: dbt_weather
+        run: dbt run --profiles-dir .
+
+      - name: Data quality tests (dbt test)
+        working-directory: dbt_weather
+        run: dbt test --profiles-dir .

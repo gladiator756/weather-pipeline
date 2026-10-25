@@ -1,0 +1,7 @@
+dbt_weather/target/
+dbt_weather/logs/
+dbt_weather/dbt_packages/
+__pycache__/
+.venv/
+.env
+.streamlit/secrets.toml

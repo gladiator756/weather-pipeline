@@ -1,0 +1,5 @@
+# Extractor + dbt (used locally and by GitHub Actions)
+requests>=2.31
+psycopg2-binary>=2.9
+dbt-core>=1.10
+dbt-postgres>=1.10

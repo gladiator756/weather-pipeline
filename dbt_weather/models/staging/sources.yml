@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: weather_raw
+        description: "Raw Open-Meteo JSON responses loaded by the Python extractor."
