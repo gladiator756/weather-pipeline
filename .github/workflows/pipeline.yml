@@ -43,3 +43,8 @@ jobs:
       - name: Data quality tests (dbt test)
         working-directory: dbt_weather
         run: dbt test --profiles-dir .
+
+      - name: Source freshness (fails if no new data for 6 hours)
+        if: always()   # also report staleness when an earlier step failed
+        working-directory: dbt_weather
+        run: dbt source freshness --profiles-dir .

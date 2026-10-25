@@ -1,0 +1,81 @@
+name: CI
+
+# Runs the whole pipeline against a throwaway Postgres for every pull request,
+# so a broken model or test is caught before it reaches the production database.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Lint Python (ruff)
+        run: ruff check --output-format=github .   # errors appear inline on the PR
+
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: weather
+          POSTGRES_PASSWORD: weather
+          POSTGRES_DB: weather
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weather -d weather"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: weather
+      POSTGRES_PASSWORD: weather
+      POSTGRES_DB: weather
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-pipeline.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-pipeline.txt
+
+      - name: Extract (Open-Meteo -> raw table)
+        run: python extractor/extract.py --once
+
+      - name: dbt build (full refresh)
+        working-directory: dbt_weather
+        run: dbt build --profiles-dir .
+
+      # Load a second batch and build again, so the incremental path of
+      # fact_weather is exercised too, not only the first full build.
+      - name: Extract again
+        run: python extractor/extract.py --once
+
+      - name: dbt build (incremental)
+        working-directory: dbt_weather
+        run: dbt build --profiles-dir .
+
+      - name: Source freshness
+        working-directory: dbt_weather
+        run: dbt source freshness --profiles-dir .

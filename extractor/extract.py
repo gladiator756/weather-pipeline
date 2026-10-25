@@ -8,12 +8,12 @@ Usage:
     python extractor/extract.py --interval 900         # every 15 min, forever
 """
 import argparse
+import logging
 import os
 import time
-import logging
 
-import requests
 import psycopg2
+import requests
 from psycopg2.extras import Json
 
 API_URL = "https://api.open-meteo.com/v1/forecast"
@@ -60,7 +60,9 @@ def fetch(lat: float, lon: float) -> dict:
     return resp.json()
 
 
-def run_once(conn) -> None:
+def run_once(conn) -> int:
+    """Load every location; return how many were loaded."""
+    loaded = 0
     with conn.cursor() as cur:
         for name, (lat, lon) in LOCATIONS.items():
             try:
@@ -73,7 +75,9 @@ def run_once(conn) -> None:
                 (name, Json(payload)),
             )
             log.info("Loaded %s", name)
+            loaded += 1
     conn.commit()
+    return loaded
 
 
 def main() -> None:
@@ -88,8 +92,10 @@ def main() -> None:
     conn.commit()
 
     while True:
-        run_once(conn)
+        loaded = run_once(conn)
         if args.once:
+            if loaded == 0:  # fail the scheduled job instead of passing silently
+                raise SystemExit("No locations could be fetched")
             break
         time.sleep(args.interval)
 
