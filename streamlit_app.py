@@ -9,6 +9,8 @@ PostgreSQL. The connection string comes from Streamlit secrets:
 
 Run locally:   streamlit run streamlit_app.py
 """
+import logging
+
 import pandas as pd
 import streamlit as st
 
@@ -57,6 +59,8 @@ st.caption(
 try:
     df = load_data()
 except Exception as exc:  # don't print the message: it may contain connection details
+    # The full error goes only to the app logs (visible to the app owner, not visitors)
+    logging.getLogger("dashboard").exception("Could not load data")
     st.error(
         "Could not load data from the database. Check the connection secret and that "
         "the pipeline has run at least once."
