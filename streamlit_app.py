@@ -11,6 +11,7 @@ Run locally:   streamlit run streamlit_app.py
 """
 import logging
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -132,18 +133,34 @@ daily = (
 )
 daily["date_id"] = pd.to_datetime(daily["date_id"])
 
+
+def line_with_points(data: pd.DataFrame, x: str, y: str, unit: str, time_format: str) -> None:
+    """Line chart per city with a dot on every value, so a single reading is still visible."""
+    chart = (
+        alt.Chart(data)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X(f"{x}:T", title=None),
+            y=alt.Y(f"{y}:Q", title=unit),
+            color=alt.Color("location_name:N", title="City"),
+            tooltip=[
+                alt.Tooltip("location_name:N", title="City"),
+                alt.Tooltip(f"{x}:T", title="Time", format=time_format),
+                alt.Tooltip(f"{y}:Q", title=unit, format=".1f"),
+            ],
+        )
+    )
+    st.altair_chart(chart, width="stretch")
+
+
 tab_temp, tab_rain, tab_data = st.tabs(["🌡️ Temperature", "🌧️ Rain & wind", "📋 Data"])
 
 with tab_temp:
     st.subheader("Average daily temperature (°C)")
-    st.line_chart(daily.pivot(index="date_id", columns="location_name", values="avg_temp"))
+    line_with_points(daily, "date_id", "avg_temp", "°C", "%d %b %Y")
 
     st.subheader("All readings (°C)")
-    st.line_chart(
-        filtered.pivot_table(
-            index="observed_at", columns="location_name", values="temperature_c", aggfunc="mean"
-        )
-    )
+    line_with_points(filtered, "observed_at", "temperature_c", "°C", "%d %b %Y, %H:%M")
 
 with tab_rain:
     left, right = st.columns(2)
@@ -152,7 +169,7 @@ with tab_rain:
         st.bar_chart(daily.pivot(index="date_id", columns="location_name", values="rain"))
     with right:
         st.subheader("Average daily wind speed (km/h)")
-        st.line_chart(daily.pivot(index="date_id", columns="location_name", values="avg_wind"))
+        line_with_points(daily, "date_id", "avg_wind", "km/h", "%d %b %Y")
 
 with tab_data:
     st.dataframe(filtered.sort_values("observed_at", ascending=False), width="stretch")
