@@ -1,4 +1,4 @@
-# 🌦️ Greece Weather Data Pipeline
+#  Greece Weather Data Pipeline
 
 An end-to-end, fully automated ELT pipeline that collects live weather data for three Greek
 cities, models it into a star schema with dbt, tests it, and serves it on a public dashboard.
