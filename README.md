@@ -1,29 +1,152 @@
-# Weather Data Pipeline
+# 🌦️ Greece Weather Data Pipeline
 
-Open-Meteo API → Python extractor → PostgreSQL → dbt star schema (with tests) → dashboard
+An end-to-end, fully automated ELT pipeline that collects live weather data for three Greek
+cities, models it into a star schema with dbt, tests it, and serves it on a public dashboard.
+It runs entirely on free cloud services, with no server to maintain.
 
-Two ways to run it:
+**[▶ Live dashboard](https://greece-weather.streamlit.app)** · Python · PostgreSQL · dbt · GitHub Actions · Streamlit
 
-| | Database | Scheduler | Dashboard |
-|---|---|---|---|
-| **Local** | Postgres in Docker | a terminal window | Metabase on localhost:3000 |
-| **Cloud (free)** | Neon | GitHub Actions | Streamlit Community Cloud (public URL) |
-
-## Project layout
-
-```
-docker-compose.yml           local Postgres + Metabase
-extractor/extract.py         fetch Open-Meteo -> raw JSON in raw.weather_raw
-dbt_weather/                 staging view + star schema (fact_weather, dim_location, dim_date) + tests
-streamlit_app.py             dashboard (reads public_marts.*)
-.github/workflows/pipeline.yml   scheduled extract + dbt run + dbt test
-requirements.txt             dashboard dependencies (Streamlit Cloud reads this)
-requirements-pipeline.txt    extractor + dbt dependencies
-```
+<!-- Add a screenshot once a few days of data have been collected:
+![Dashboard screenshot](docs/dashboard.png)
+-->
 
 ---
 
-## Local run
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Open-Meteo API] -->|Python extractor| B[(raw.weather_raw<br/>JSONB)]
+    B -->|dbt| C[stg_weather<br/>view]
+    C -->|dbt| D[fact_weather]
+    C -->|dbt| E[dim_location]
+    C -->|dbt| F[dim_date]
+    D & E & F --> G[Streamlit dashboard]
+
+    subgraph Neon[PostgreSQL on Neon]
+        B
+        C
+        D
+        E
+        F
+    end
+
+    H[GitHub Actions<br/>every ~30 min] -.runs.-> A
+    H -.runs.-> C
+```
+
+Every ~30 minutes a GitHub Actions job:
+
+1. **Extracts** current conditions for Athens, Thessaloniki and Ioannina from the
+   [Open-Meteo API](https://open-meteo.com/) and loads the untouched JSON response into a raw table.
+2. **Transforms** it with `dbt run`: JSON parsing, typing and de-duplication in staging, then a star schema.
+3. **Tests** it with `dbt test`. If a test fails, the run turns red and the problem is visible straight away.
+
+The Streamlit dashboard reads only from the modelled tables, and caches query results for 10 minutes.
+
+## Data model
+
+```mermaid
+erDiagram
+    fact_weather }o--|| dim_location : location_id
+    fact_weather }o--|| dim_date : date_id
+
+    fact_weather {
+        text observation_id PK
+        text location_id FK
+        date date_id FK
+        timestamp observed_at
+        numeric temperature_c
+        numeric feels_like_c
+        numeric humidity_pct
+        numeric precipitation_mm
+        numeric wind_speed_kmh
+        int weather_code
+    }
+    dim_location {
+        text location_id PK
+        text location_name
+        numeric latitude
+        numeric longitude
+    }
+    dim_date {
+        date date_id PK
+        int year
+        int month
+        int day
+        int day_of_week
+        text day_name
+        bool is_weekend
+    }
+```
+
+| Layer | Schema | Materialization | Purpose |
+|---|---|---|---|
+| Raw | `raw` | table | Exact API responses as JSONB, so the history can be reprocessed if the parsing logic changes |
+| Staging | `public_staging` | view | Parse JSON, cast types, keep one row per city and observation time |
+| Marts | `public_marts` | table | Star schema used by the dashboard |
+
+**Grain of `fact_weather`:** one row per city per observation time. Open-Meteo updates every
+15 minutes and the job may fetch the same observation twice, so staging de-duplicates with
+`row_number()` over `(location_name, observed_at)`.
+
+## Data quality
+
+The tests run on every pipeline run:
+
+- **Keys:** `unique` and `not_null` on every primary key.
+- **Referential integrity:** `relationships` tests from the fact table to both dimensions.
+- **Completeness:** `not_null` on temperature.
+- **Plausibility:** a custom singular test fails if humidity is outside 0–100 %, temperature
+  outside −60…60 °C, or wind and rain are negative.
+
+## Design decisions
+
+| Choice | Why |
+|---|---|
+| **ELT with a raw JSONB layer** | Loading first and transforming in the warehouse keeps the original data. A modelling bug can be fixed and replayed without calling the API again. |
+| **dbt** | SQL transformations under version control, with dependencies, tests and documentation in one place. |
+| **Star schema** | A simple, standard shape for analytics: one fact table and small dimensions that any BI tool understands. |
+| **Neon (serverless Postgres)** | Real PostgreSQL on a free tier that scales to zero between runs. |
+| **GitHub Actions as scheduler** | No server or Airflow instance to run for a single small job. Credentials are stored as encrypted repository secrets. |
+| **Streamlit Community Cloud** | A shareable public URL, deployed directly from this repo. |
+
+## Lessons learned
+
+- **Dependency drift breaks deployments.** The dashboard failed after deployment with
+  `ModuleNotFoundError: psycopg`. SQLAlchemy 2.1 changed the default PostgreSQL driver for
+  `postgresql://` URLs from `psycopg2` to `psycopg` (v3). The fix was to add the new driver.
+  The diagnosis was helped by logging the full error to the app logs while showing visitors
+  only a generic message, so connection details never reach the page.
+- **Pooled versus direct connections.** dbt and the extractor use Neon's direct host instead of the
+  pooler endpoint, which avoids issues with session-level features that poolers don't support.
+- **Scheduled CI is best effort.** GitHub may delay or skip scheduled runs. The de-duplication
+  and daily aggregates make the data tolerant of occasional gaps.
+
+## Possible next steps
+
+- Make `fact_weather` incremental instead of rebuilding it on every run.
+- Add `dbt source freshness` so the job alerts when no new data arrives.
+- Add a pull-request workflow that compiles the dbt project and lints the Python code.
+- Add more cities, or hourly forecasts next to observations.
+
+---
+
+## Run it yourself
+
+### Project layout
+
+```
+extractor/extract.py             Open-Meteo -> raw.weather_raw
+dbt_weather/                     staging view, star schema and tests
+streamlit_app.py                 dashboard
+.github/workflows/pipeline.yml   scheduled extract + dbt run + dbt test
+docker-compose.yml               local Postgres + Metabase
+requirements.txt                 dashboard dependencies
+requirements-pipeline.txt        extractor + dbt dependencies
+```
+
+### Locally with Docker
 
 ```bash
 docker compose up -d
@@ -33,64 +156,22 @@ python extractor/extract.py --once
 cd dbt_weather && dbt run --profiles-dir . && dbt test --profiles-dir .
 ```
 
-If port 5432 is taken by another Postgres, change `"5432:5432"` to `"5433:5432"` in
-`docker-compose.yml` and set `POSTGRES_HOST=127.0.0.1` and `POSTGRES_PORT=5433` in your terminal.
+Metabase is then available on http://localhost:3000. To run the dashboard locally, copy
+`.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`, then run `pip install -r requirements.txt`
+and `streamlit run streamlit_app.py`.
 
----
+### In the cloud (free)
 
-## Free cloud deployment (no server, no cost)
-
-### 1. Create the database on Neon
-1. Sign up at https://neon.com (no credit card) and create a project. Pick a nearby region (e.g. Frankfurt).
-2. Click **Connect**, turn **connection pooling off** to get the direct host, and note the
-   host, user, password and database name.
-
-### 2. Put the project on a PUBLIC GitHub repository
-Public repos get unlimited free Actions minutes, and Streamlit Community Cloud deploys from GitHub.
-Never commit passwords: `.env` and `.streamlit/secrets.toml` are in `.gitignore`.
-
-```bash
-git init
-git add .
-git commit -m "Weather pipeline"
-git branch -M main
-git remote add origin https://github.com/<your-user>/<your-repo>.git
-git push -u origin main
-```
-
-### 3. Add the database credentials as GitHub secrets
-Repo → **Settings → Secrets and variables → Actions → New repository secret**. Create four:
-
-| Secret name | Value |
-|---|---|
-| `POSTGRES_HOST` | Neon host, e.g. `ep-xxxx.eu-central-1.aws.neon.tech` |
-| `POSTGRES_USER` | Neon user |
-| `POSTGRES_PASSWORD` | Neon password |
-| `POSTGRES_DB` | Neon database name (usually `neondb`) |
-
-### 4. Run the pipeline once by hand
-Repo → **Actions → Weather pipeline → Run workflow**. When it turns green, the raw table,
-the dbt models and the dbt tests have all run in the cloud. After that it runs by itself
-twice an hour.
-
-### 5. Deploy the dashboard on Streamlit Community Cloud
-1. Go to https://share.streamlit.io and sign in with GitHub.
-2. **Create app** → pick your repo, branch `main`, main file path `streamlit_app.py`.
-3. Open **Advanced settings**: choose Python 3.12 and paste into **Secrets**:
+1. **Neon:** create a project and copy the direct connection details (connection pooling off).
+2. **GitHub:** push this repo (public repos get free Actions minutes) and add the repository secrets
+   `POSTGRES_HOST`, `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`.
+3. **Run once:** Actions → *Weather pipeline* → *Run workflow*. After that it runs on its own.
+4. **Streamlit Community Cloud:** create an app from this repo with `streamlit_app.py` and Python 3.12,
+   and add this secret:
    ```toml
    [connections.weather_db]
    url = "postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require"
    ```
-   (fill in the Neon values; keep only `sslmode=require` in the query string).
-4. Click **Deploy**. You get a public `https://<name>.streamlit.app` URL to share.
 
-### Things to know
-- **Scheduling is best effort.** GitHub may delay scheduled runs by several minutes or more, so
-  expect occasional gaps. Daily trends are not affected.
-- **Scheduled workflows pause after 60 days without repository activity.** Push any small commit
-  every month or two, or press *Run workflow* again.
-- **Streamlit apps sleep after about 12 hours without visitors.** The first visitor sees a
-  "wake up" button; the data is unaffected.
-- **Neon free plan:** 0.5 GB storage and 100 compute-hours per month. This pipeline stores
-  a few MB per month and uses a small fraction of the compute.
-- Check each provider's current free-tier terms before relying on them.
+**Free-tier notes:** scheduled workflows pause after 60 days without repository activity, and
+Streamlit apps sleep after about 12 hours without visitors (the first visitor wakes the app).
